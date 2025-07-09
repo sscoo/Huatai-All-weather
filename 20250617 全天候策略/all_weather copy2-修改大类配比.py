@@ -53,7 +53,7 @@ except ImportError as exc:  # pragma: no cover
 # Configuration
 # ---------------------------------------------------------------------------
 START_DATE = "2011-01-01"
-END_DATE = "2025-06-15"
+END_DATE = "2025-06-30"
 FEE_RATE = 0.0001  # 单边万分之五
 EWMA_LAMBDA = 0.96  # decay parameter for EWMA
 WINDOW_MONTHS = 36  # rolling window for risk estimation
@@ -61,15 +61,15 @@ REBALANCE_FREQ = "ME"  # 调仓频率: "W"=周末, "ME"=月末, "QE"=季末, "YE
 
 # Mapping from Bloomberg-like ticker to akshare symbol ---------------------------------
 TICKER_MAP: Dict[str, str] = {
-    "510300.SH": "sh510300",  # 沪深 300 ETF
-    "512100.SH": "sh512100",  # 中证 1000 ETF
-    "512890.SH": "sh512890",  # 红利低波 ETF
-    "511260.SH": "sh511260",  # 10Y 国债 ETF
-    "511090.SH": "sh511090",  # 30Y 国债 ETF
-    "159980.SZ": "sz159980",  # 有色 ETF
-    "159981.SZ": "sz159981",  # 能化 ETF
-    "159985.SZ": "sz159985",  # 豆粕 ETF
-    "518880.SH": "sh518880",  # 黄金 ETF
+    "510300.SH": "sh510300",  # 沪深 300 ETF 股票
+    "512100.SH": "sh512100",  # 中证 1000 ETF 股票
+    "512890.SH": "sh512890",  # 红利低波 ETF 红利
+    "511260.SH": "sh511260",  # 10Y 国债 ETF 债券
+    "511090.SH": "sh511090",  # 30Y 国债 ETF 债券
+    "159980.SZ": "sz159980",  # 有色 ETF 商品
+    "159981.SZ": "sz159981",  # 能化 ETF 商品
+    "159985.SZ": "sz159985",  # 豆粕 ETF 商品
+    "518880.SH": "sh518880",  # 黄金 ETF 商品
 }
 
 # ETF名称映射
@@ -85,33 +85,43 @@ ETF_NAMES: Dict[str, str] = {
     "518880.SH": "黄金ETF",
 }
 
-# Quadrant asset allocation -----------------------------------------------------------
-QUADRANTS: Dict[str, List[str]] = {
-    "Growth_Up": [
-        "510300.SH",
-        "512100.SH",
-        "159980.SZ",
-        "159981.SZ",
-        "159985.SZ",
-    ],
-    "Inflation_Up": [
-        "159980.SZ",
-        "159981.SZ",
-        "159985.SZ",
-        "518880.SH",
-    ],
-    "Growth_Down": [
-        "511260.SH",
-        "511090.SH",
-        "518880.SH",
-        "512890.SH",
-    ],
-    "Inflation_Down": [
-        "511260.SH",
-        "511090.SH",
-        "518880.SH",
-    ],
+# 资产类别定义
+ASSET_CLASSES: Dict[str, List[str]] = {
+    "股票": ["510300.SH", "512100.SH"],           # 沪深300ETF, 中证1000ETF
+    "债券": ["511260.SH", "511090.SH"],           # 10年国债ETF, 30年国债ETF
+    "商品": ["159980.SZ", "159981.SZ", "159985.SZ"], # 有色ETF, 能化ETF, 豆粕ETF
+    "黄金": ["518880.SH"],                       # 黄金ETF
+    "红利": ["512890.SH"],                       # 红利低波ETF
 }
+
+# 象限内大类资产配比定义
+QUADRANT_ALLOCATIONS: Dict[str, Dict[str, float]] = {
+    "Growth_Up": {      # 股票和商品1:1
+        "股票": 0.5,
+        "商品": 0.5,
+    },
+    "Inflation_Up": {   # 商品和黄金1:1
+        "商品": 0.5,
+        "黄金": 0.5,
+    },
+    "Growth_Down": {    # 债券、黄金、红利1:1:1
+        "债券": 1/3,
+        "黄金": 1/3,
+        "红利": 1/3,
+    },
+    "Inflation_Down": { # 债券和黄金1:1
+        "债券": 0.5,
+        "黄金": 0.5,
+    },
+}
+
+# 从配比生成每个象限的ETF列表（保持兼容性）
+QUADRANTS: Dict[str, List[str]] = {}
+for quadrant, allocations in QUADRANT_ALLOCATIONS.items():
+    etf_list = []
+    for asset_class in allocations.keys():
+        etf_list.extend(ASSET_CLASSES[asset_class])
+    QUADRANTS[quadrant] = etf_list
 
 # 象限中文名称
 QUADRANT_NAMES: Dict[str, str] = {
@@ -232,10 +242,51 @@ def backtest() -> Tuple[pd.Series, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     prices_m = prices_daily.resample(REBALANCE_FREQ).last()
     rets = prices_m.pct_change().dropna(how="all")
 
-    # Build quadrant returns (equal-weight inside quadrant)
+    # 分析数据可用性（动态逻辑，支持部分ETF缺失）
+    print("启用动态资产类别权重调整逻辑...")
+
+    # Build quadrant returns (按大类资产配比计算，允许跳过缺失的资产类别)
     quad_ret = pd.DataFrame(index=rets.index)
-    for q, members in QUADRANTS.items():
-        quad_ret[q] = rets[members].mean(axis=1)
+    
+    for q, allocations in QUADRANT_ALLOCATIONS.items():
+        quadrant_return = pd.Series(index=rets.index, dtype=float)
+        
+        print(f"\n计算 {q} ({QUADRANT_NAMES[q]}) 象限收益:")
+        
+        for date_idx in rets.index:
+            available_classes = {}
+            total_available_weight = 0.0
+            
+            # 检查每个资产类别在当前时间点是否有数据
+            for asset_class, weight in allocations.items():
+                asset_etfs = ASSET_CLASSES[asset_class]
+                # 检查该类别在当前时间点是否有至少一个ETF可用
+                available_etfs = [etf for etf in asset_etfs if etf in rets.columns and not pd.isna(rets.loc[date_idx, etf])]
+                
+                if available_etfs:  # 只要有至少一个ETF可用就认为该类别可用
+                    available_classes[asset_class] = weight
+                    total_available_weight += weight
+            
+            # 重新归一化权重并计算当前时间点的象限收益
+            if total_available_weight > 0:
+                date_return = 0.0
+                for asset_class, original_weight in available_classes.items():
+                    # 归一化权重
+                    normalized_weight = original_weight / total_available_weight
+                    # 计算该资产类别的收益（使用该类别内可用ETF的平均值）
+                    asset_etfs = ASSET_CLASSES[asset_class]
+                    available_etfs = [etf for etf in asset_etfs if etf in rets.columns and not pd.isna(rets.loc[date_idx, etf])]
+                    asset_return = rets.loc[date_idx, available_etfs].mean()
+                    date_return += normalized_weight * asset_return
+                
+                quadrant_return.loc[date_idx] = date_return
+            else:
+                quadrant_return.loc[date_idx] = np.nan
+        
+        # 显示该象限的配比情况
+        print(f"  配比: {' + '.join([f'{cls} {weight:.1%}' for cls, weight in allocations.items()])}")
+        
+        quad_ret[q] = quadrant_return
 
     # Ensure consistent numeric np.ndarray views
     quad_ret.dropna(inplace=True)
@@ -258,10 +309,39 @@ def backtest() -> Tuple[pd.Series, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         q_weights = risk_parity_weights(sigma)  # ndarray
         q_weights = pd.Series(q_weights, index=quad_ret.columns, name=date)
 
-        # Map quadrant weights back to individual assets (equal weight inside)
+        # Map quadrant weights back to individual assets (按大类资产配比，跳过缺失数据)
         asset_w = pd.Series(0.0, index=rets.columns)
-        for q, members in QUADRANTS.items():
-            asset_w[members] += q_weights[q] / len(members)
+        next_date = rets.index[t_idx + 1]  # 下个月的数据
+        
+        for q, allocations in QUADRANT_ALLOCATIONS.items():
+            quadrant_weight = q_weights[q]
+            
+            # 检查下个时间点该象限有哪些资产类别可用
+            available_classes = {}
+            total_available_weight = 0.0
+            
+            for asset_class, class_weight in allocations.items():
+                asset_etfs = ASSET_CLASSES[asset_class]
+                # 检查该类别在下个时间点是否有至少一个ETF可用
+                available_etfs = [etf for etf in asset_etfs if etf in rets.columns and not pd.isna(rets.loc[next_date, etf])]
+                
+                if available_etfs:  # 只要有至少一个ETF可用就认为该类别可用
+                    available_classes[asset_class] = class_weight
+                    total_available_weight += class_weight
+            
+            # 重新归一化权重并分配到具体ETF
+            if total_available_weight > 0:
+                for asset_class, original_weight in available_classes.items():
+                    # 归一化权重
+                    normalized_weight = original_weight / total_available_weight
+                    # 该大类资产在组合中的权重
+                    class_total_weight = quadrant_weight * normalized_weight
+                    # 该大类资产内的ETF等权重分配（只分配给可用的ETF）
+                    asset_etfs = ASSET_CLASSES[asset_class]
+                    available_etfs = [etf for etf in asset_etfs if etf in rets.columns and not pd.isna(rets.loc[next_date, etf])]
+                    for etf in available_etfs:
+                        asset_w[etf] += class_total_weight / len(available_etfs)
+                        
         asset_w /= asset_w.sum()  # renormalise to 1.0
 
         # Transaction cost

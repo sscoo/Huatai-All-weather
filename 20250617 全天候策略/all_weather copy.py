@@ -42,6 +42,10 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
+# use agg for matplotlib
+import matplotlib
+matplotlib.use('agg')
+import matplotlib.pyplot as plt
 
 # try/except so the file is importable even if akshare is not installed yet.
 try:
@@ -57,12 +61,12 @@ except ImportError as exc:  # pragma: no cover
 # pip install akshare --upgrade
 # ---------------------------------------------------------------------------
 
-START_DATE = "2010-01-01"
-END_DATE = "2025-06-15"
+START_DATE = "2011-12-31"
+END_DATE = "2025-06-30"
 FEE_RATE = 0.0001  # 单边万分之一
-EWMA_LAMBDA = 0.80  # decay parameter for EWMA
-WINDOW_MONTHS = 20  # rolling window for risk estimation
-REBALANCE_FREQ = "W"  # 调仓频率: "W"=周末, "ME"=月末, "QE"=季末, "YE"=年末
+EWMA_LAMBDA = 0.96  # decay parameter for EWMA
+WINDOW_MONTHS = 36  # rolling window for risk estimation
+REBALANCE_FREQ = "ME"  # 调仓频率: "W"=周末, "ME"=月末, "QE"=季末, "YE"=年末
 
 # Asset Universe -----------------------------------------------------------------------
 ASSET_NAMES: Dict[str, str] = {
@@ -103,10 +107,10 @@ ASSET_CLASSES: Dict[str, List[str]] = {
 
 # Quadrant asset allocation (Asset Class Weights) ------------------------------------
 QUADRANTS: Dict[str, Dict[str, float]] = {
-    "通胀超预期_增长超预期": {"股票": 2, "商品": 1},
-    "通胀超预期_增长不及预期": {"商品": 3, "黄金": 2, "红利": 1},
-    "通胀不及预期_增长超预期": {"股票": 3, "债券": 1},
-    "通胀不及预期_增长不及预期": {"债券": 3, "红利": 1},
+    "通胀超预期_增长超预期": {"股票": 1, "商品": 1},
+    "通胀超预期_增长不及预期": {"商品": 1, "黄金": 1, "红利": 1},
+    "通胀不及预期_增长超预期": {"股票": 1, "债券": 1},
+    "通胀不及预期_增长不及预期": {"债券": 1, "红利": 1},
 }
 
 # Normalize quadrant weights to sum to 1
@@ -564,7 +568,7 @@ def main() -> None:
         axes[1, 1].grid(True, alpha=0.3)
         
         plt.tight_layout()
-        plt.savefig(OUTPUT_DIR / 'strategy_analysis.png', dpi=300, bbox_inches='tight')
+        plt.savefig(OUTPUT_DIR / 'strategy_analysis1.png', dpi=300, bbox_inches='tight')
         plt.show()
         
     except ImportError:
