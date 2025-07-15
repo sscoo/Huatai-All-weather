@@ -66,7 +66,7 @@ END_DATE = "2025-06-30"
 FEE_RATE = 0.0001  # 单边万分之一
 EWMA_LAMBDA = 0.96  # decay parameter for EWMA
 WINDOW_MONTHS = 36  # rolling window for risk estimation
-REBALANCE_FREQ = "ME"  # 调仓频率: "W"=周末, "ME"=月末, "QE"=季末, "YE"=年末
+REBALANCE_FREQ = "M"  # 调仓频率: "W"=周, "M"=月末, "Q"=季末, "Y"=年末
 
 # Asset Universe -----------------------------------------------------------------------
 ASSET_NAMES: Dict[str, str] = {
@@ -204,6 +204,9 @@ def fetch_price_series(ticker: str) -> pd.Series:
 def get_all_prices(tickers: List[str]) -> pd.DataFrame:
     series = [fetch_price_series(t) for t in tickers]
     prices = pd.concat(series, axis=1).sort_index()
+    # 确保索引是 datetime 类型
+    if not isinstance(prices.index, pd.DatetimeIndex):
+        prices.index = pd.to_datetime(prices.index)
     return prices
 
 
@@ -269,9 +272,10 @@ def backtest() -> Tuple[pd.Series, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     all_tickers = list(ASSET_NAMES.keys())
     prices_daily = get_all_prices(all_tickers)
+    print(prices_daily)
 
     # Restrict sample window and forward-fill (ETFs may start trading later).
-    prices_daily = prices_daily.loc[START_DATE:END_DATE].ffill()
+    prices_daily = prices_daily.loc[pd.to_datetime(START_DATE):pd.to_datetime(END_DATE)].ffill()
 
     # Resample to specified frequency last price & compute simple returns.
     prices_m = prices_daily.resample(REBALANCE_FREQ).last()
@@ -374,7 +378,7 @@ def backtest() -> Tuple[pd.Series, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 def performance_summary(ret: pd.Series) -> pd.Series:
     cum = (1 + ret).cumprod()
     # 根据调仓频率确定年化因子
-    freq_to_factor = {"W": 52, "ME": 12, "QE": 4, "YE": 1}
+    freq_to_factor = {"W": 52, "M": 12, "Q": 4, "Y": 1}
     ann_factor = freq_to_factor.get(REBALANCE_FREQ, 12)
     cagr = cum.iloc[-1] ** (ann_factor / len(ret)) - 1
     vol = ret.std() * math.sqrt(ann_factor)
@@ -410,7 +414,7 @@ def performance_summary(ret: pd.Series) -> pd.Series:
 def calculate_annual_performance(returns: pd.Series) -> pd.DataFrame:
     """计算年度绩效表现"""
     annual_data = []
-    freq_to_factor = {"W": 52, "ME": 12, "QE": 4, "YE": 1}
+    freq_to_factor = {"W": 52, "M": 12, "Q": 4, "Y": 1}
     ann_factor = freq_to_factor.get(REBALANCE_FREQ, 12)
     
     for year in range(returns.index[0].year, returns.index[-1].year + 1):
