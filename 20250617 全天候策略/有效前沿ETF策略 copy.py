@@ -1,5 +1,9 @@
 # https://mp.weixin.qq.com/s/f0YqHAT9Wn1qpKb8-4oj_w
-
+# 修改版本：支持每月月初和月中调仓（每月两次调仓）
+# 主要修改：
+# 1. monthly_rebalancing_backtest函数：支持每月多个调仓日期
+# 2. run_monthly_analysis函数：新增rebalance_days参数
+# 3. 默认调仓日期设置为[1, 15]，即每月1日和15日
 import akshare as ak
 import pandas as pd
 import numpy as np
@@ -18,6 +22,20 @@ warnings.filterwarnings('ignore')
 class EfficientFrontierETF:
     def __init__(self):
         # ETF代码和名称
+        # self.etf_codes = {
+        #     '159934': '黄金ETF',
+        #     '515450': '红利低波50ETF', 
+        #     '513100': '纳指ETF',
+        #     '161716': '招商双债LOF',
+        #     '159985': '豆粕ETF',
+        #     '513880': '日经225ETF',
+        #     '510300': '沪深300ETF',
+        #     '159920': '恒生ETF',
+        #     '159740': '恒生科技ETF',
+        #     '511090': '30年国债ETF',
+        #     '159980': '有色ETF',
+        #     '160723': '嘉实原油LOF'
+        # }
         self.etf_codes = {
             '159934': '黄金ETF',
             '510880': '红利ETF', 
@@ -33,6 +51,7 @@ class EfficientFrontierETF:
             '159980': '有色ETF',
             '160723': '嘉实原油LOF'
         }
+
         
         self.data = None
         self.returns = None
@@ -804,15 +823,15 @@ class EfficientFrontierETF:
         }
     
     def monthly_rebalancing_backtest(self, start_date='20210101', end_date=None, 
-                                   lookback_months=12, rebalance_day=1):
+                                   lookback_months=12, rebalance_days=[1, 15]):
         """
-        月度调仓回测
+        月度调仓回测 - 支持每月多次调仓
         
         Parameters:
         - start_date: 回测开始日期
         - end_date: 回测结束日期
         - lookback_months: 优化时使用的历史数据长度(月)
-        - rebalance_day: 每月调仓日期(1-28)
+        - rebalance_days: 每月调仓日期列表，默认[1, 15]表示每月1日和15日调仓
         """
         if end_date is None:
             end_date = datetime.now().strftime('%Y%m%d')
@@ -822,7 +841,7 @@ class EfficientFrontierETF:
         print("="*80)
         print(f"回测期间: {start_date} - {end_date}")
         print(f"历史数据窗口: {lookback_months} 个月")
-        print(f"调仓频率: 每月 {rebalance_day} 日")
+        print(f"调仓频率: 每月 {rebalance_days} 日")
         
         # 获取完整数据
         full_start_date = pd.to_datetime(start_date) - pd.DateOffset(months=lookback_months + 2)
@@ -833,26 +852,55 @@ class EfficientFrontierETF:
         end_dt = pd.to_datetime(end_date)
         
         rebalance_dates = []
-        current_date = start_dt.replace(day=rebalance_day)
         
-        while current_date <= end_dt:
-            # 找到最近的交易日
-            while current_date not in self.data.index and current_date <= end_dt:
-                current_date += pd.Timedelta(days=1)
-            
-            if current_date <= end_dt and current_date in self.data.index:
-                rebalance_dates.append(current_date)
+        # 确定开始年月
+        current_year = start_dt.year
+        current_month = start_dt.month
+        
+        while True:
+            # 为当前月份生成所有调仓日期
+            for rebalance_day in rebalance_days:
+                try:
+                    current_date = pd.Timestamp(year=current_year, month=current_month, day=rebalance_day)
+                except ValueError:  # 处理某些月份没有对应日期的情况（如2月30日）
+                    # 如果指定日期不存在，使用当月最后一天
+                    import calendar
+                    last_day = calendar.monthrange(current_year, current_month)[1]
+                    current_date = pd.Timestamp(year=current_year, month=current_month, 
+                                              day=min(rebalance_day, last_day))
+                
+                # 只考虑在回测期间内的日期
+                if current_date >= start_dt and current_date <= end_dt:
+                    # 找到最近的交易日
+                    search_date = current_date
+                    found_trading_day = False
+                    
+                    # 向前向后各搜索5个工作日
+                    for offset in range(-5, 6):
+                        candidate_date = search_date + pd.Timedelta(days=offset)
+                        if candidate_date in self.data.index and candidate_date <= end_dt:
+                            rebalance_dates.append(candidate_date)
+                            found_trading_day = True
+                            break
+                    
+                    if not found_trading_day:
+                        print(f"警告: 未找到 {current_date.strftime('%Y-%m-%d')} 附近的交易日")
             
             # 移动到下个月
-            if current_date.month == 12:
-                current_date = current_date.replace(year=current_date.year + 1, month=1, day=rebalance_day)
+            if current_month == 12:
+                current_year += 1
+                current_month = 1
             else:
-                try:
-                    current_date = current_date.replace(month=current_date.month + 1, day=rebalance_day)
-                except ValueError:  # 处理31号的情况
-                    current_date = current_date.replace(month=current_date.month + 1, day=28)
+                current_month += 1
+            
+            # 检查是否超出结束日期
+            if pd.Timestamp(year=current_year, month=current_month, day=1) > end_dt:
+                break
         
-        print(f"调仓次数: {len(rebalance_dates)} 次")
+        # 移除重复日期并排序
+        rebalance_dates = sorted(list(set(rebalance_dates)))
+        
+        print(f"调仓次数: {len(rebalance_dates)} 次 (每月{len(rebalance_days)}次)")
         
         # 存储每次调仓的权重和表现
         self.monthly_weights_history = {
@@ -909,6 +957,22 @@ class EfficientFrontierETF:
                 
                 print(f"优化完成，训练数据: {len(train_data)} 个交易日")
                 
+                # 输出各策略的权重分配
+                print("\n🔍 本次调仓权重分配：")
+                strategies = [
+                    ('最大夏普比率组合', self.optimal_portfolios['max_sharpe']),
+                    ('最大卡玛比率组合', self.optimal_portfolios['max_calmar']),
+                    ('控制回撤高收益组合', self.optimal_portfolios['high_return'])
+                ]
+                
+                for strategy_name, weights in strategies:
+                    print(f"\n📊 {strategy_name}:")
+                    for j, (etf_code, etf_name) in enumerate(self.etf_codes.items()):
+                        if j < len(weights) and weights[j] > 0.001:  # 只显示权重大于0.1%的资产
+                            print(f"   {etf_name:15} ({etf_code}): {weights[j]:7.1%}")
+                
+                print("-" * 60)
+                
             except Exception as e:
                 print(f"优化失败: {e}")
                 # 使用等权重作为备选
@@ -920,6 +984,13 @@ class EfficientFrontierETF:
                 self.monthly_weights_history['max_calmar_weights'].append(equal_weights)
                 self.monthly_weights_history['high_return_weights'].append(equal_weights)
                 print(f"使用等权重作为备选方案")
+                
+                # 输出等权重分配
+                print("\n🔍 本次调仓权重分配（等权重备选）：")
+                print(f"📊 所有策略均采用等权重:")
+                for etf_code, etf_name in self.etf_codes.items():
+                    print(f"   {etf_name:15} ({etf_code}): {1/num_assets:7.1%}")
+                print("-" * 60)
             
             finally:
                 self.data = original_data
@@ -1073,12 +1144,55 @@ class EfficientFrontierETF:
                 print(f"卡玛比率: {result['calmar_ratio']:.3f}")
                 print(f"胜率: {result['win_rate']:.1%}")
                 
+        # 输出最新调仓信息
+        self._print_latest_weights()
+        
         # 添加调试信息
         print(f"\n调试信息:")
         print(f"调仓日期数量: {len(self.monthly_weights_history['dates'])}")
         print(f"最大夏普权重数量: {len(self.monthly_weights_history['max_sharpe_weights'])}")
         print(f"最大卡玛权重数量: {len(self.monthly_weights_history['max_calmar_weights'])}")
         print(f"高收益权重数量: {len(self.monthly_weights_history['high_return_weights'])}")
+    
+    def _print_latest_weights(self):
+        """
+        输出最新一期的权重分配
+        """
+        if (hasattr(self, 'monthly_weights_history') and 
+            len(self.monthly_weights_history['dates']) > 0):
+            
+            print(f"\n" + "="*80)
+            print("📋 最新一期权重分配详情")
+            print("="*80)
+            
+            latest_date = self.monthly_weights_history['dates'][-1]
+            print(f"调仓日期: {latest_date.strftime('%Y-%m-%d')}")
+            
+            # 策略名称映射
+            strategies = {
+                'max_sharpe': ('最大夏普比率组合', self.monthly_weights_history['max_sharpe_weights'][-1]),
+                'max_calmar': ('最大卡玛比率组合', self.monthly_weights_history['max_calmar_weights'][-1]),
+                'high_return': ('控制回撤高收益组合', self.monthly_weights_history['high_return_weights'][-1])
+            }
+            
+            for strategy_key, (strategy_name, weights) in strategies.items():
+                print(f"\n📊 {strategy_name}:")
+                print("-" * 50)
+                
+                # 按权重大小排序输出
+                weight_pairs = []
+                for j, (etf_code, etf_name) in enumerate(self.etf_codes.items()):
+                    if j < len(weights):
+                        weight_pairs.append((weights[j], etf_name, etf_code))
+                
+                # 按权重从大到小排序
+                weight_pairs.sort(reverse=True)
+                
+                for weight, etf_name, etf_code in weight_pairs:
+                    if weight > 0.001:  # 只显示权重大于0.1%的资产
+                        print(f"   {etf_name:15} ({etf_code}): {weight:7.1%}")
+            
+            print("="*80)
     
     def plot_monthly_backtest_results(self, save_path=None):
         """
@@ -1212,15 +1326,23 @@ class EfficientFrontierETF:
         plt.show()
     
     def run_monthly_analysis(self, start_date='20210101', end_date=None, 
-                           lookback_months=12, save_results=True):
+                           lookback_months=12, rebalance_days=[1, 15], save_results=True):
         """
         运行完整的月度调仓分析
+        
+        Parameters:
+        - start_date: 回测开始日期
+        - end_date: 回测结束日期
+        - lookback_months: 优化时使用的历史数据长度(月)
+        - rebalance_days: 每月调仓日期列表，默认[1, 15]表示每月1日和15日调仓
+        - save_results: 是否保存结果
         """
         # 执行月度调仓回测
         monthly_results = self.monthly_rebalancing_backtest(
             start_date=start_date, 
             end_date=end_date,
-            lookback_months=lookback_months
+            lookback_months=lookback_months,
+            rebalance_days=rebalance_days
         )
         
         # 绘制分析图表
@@ -1232,11 +1354,11 @@ class EfficientFrontierETF:
         
         # 保存详细数据
         if save_results:
-            self.save_monthly_results(start_date, end_date, lookback_months)
+            self.save_monthly_results(start_date, end_date, lookback_months, rebalance_days)
         
         return monthly_results
     
-    def save_monthly_results(self, start_date, end_date, lookback_months):
+    def save_monthly_results(self, start_date, end_date, lookback_months, rebalance_days=[1, 15]):
         """
         保存月度调仓分析的详细结果
         """
@@ -1265,7 +1387,8 @@ class EfficientFrontierETF:
                     '胜率': f"{result['win_rate']:.4f}",
                     '回测开始日期': start_date,
                     '回测结束日期': end_date or datetime.now().strftime('%Y%m%d'),
-                    '历史数据窗口_月': lookback_months
+                    '历史数据窗口_月': lookback_months,
+                    '调仓日期': str(rebalance_days)
                 })
         
         summary_df = pd.DataFrame(summary_data)
@@ -1389,7 +1512,8 @@ class EfficientFrontierETF:
                 f"回测开始日期: {start_date}",
                 f"回测结束日期: {end_date or datetime.now().strftime('%Y%m%d')}",
                 f"历史数据窗口: {lookback_months} 个月",
-                f"调仓频率: 每月1日",
+                f"调仓频率: 每月{rebalance_days}日",
+                f"调仓次数: 每月{len(rebalance_days)}次",
                 f"ETF数量: {len(self.etf_codes)}",
                 f"策略数量: {len(strategy_names)}",
                 f"分析生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
@@ -1429,10 +1553,11 @@ def main():
         # print("开始月度动态调仓分析...")
         # print("="*80)
         
-        # 方法3: 运行月度动态调仓回测 (新增)
+        # 方法3: 运行月度动态调仓回测 (新增) - 每月月初和月中调仓
         monthly_results = ef_analyzer.run_monthly_analysis(
-            start_date='20190101',  # 调仓回测开始日期
-            lookback_months=12,     # 使用12个月历史数据进行优化
+            start_date='20200101',      # 调仓回测开始日期
+            lookback_months=12,         # 使用12个月历史数据进行优化
+            rebalance_days=[1, 15],     # 每月1日和15日调仓
             save_results=True
         )
         
@@ -1454,7 +1579,8 @@ def main():
         print("- 样本内外表现存在差异是正常现象")
         print("- 建议关注样本外的夏普比率和最大回撤控制")
         print("- 可根据实际风险偏好选择合适的投资组合")
-        print("- 月度调仓策略可以更好地适应市场变化")
+        print("- 每月月初和月中调仓策略可以更好地适应市场变化")
+        print("- 增加调仓频率有助于及时调整投资组合，但可能增加交易成本")
         
         # 方法2: 也可以运行传统的全样本分析
         # results = ef_analyzer.run_complete_analysis(start_date='20200101')

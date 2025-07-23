@@ -449,14 +449,34 @@ def save_results(port_ret: pd.Series, asset_weights: pd.DataFrame,
     """保存结果到文件"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # 保存投资组合收益
-    port_nav = (1 + port_ret).cumprod()
-    results_df = pd.DataFrame({
+    # 获取日度数据
+    all_tickers = list(ASSET_NAMES.keys())
+    prices_daily = get_all_prices(all_tickers)
+    prices_daily = prices_daily.loc[pd.to_datetime(START_DATE):pd.to_datetime(END_DATE)].ffill()
+    
+    # 计算日度资产权重（通过月度权重forward fill得到）
+    asset_weights_daily = asset_weights.reindex(prices_daily.index, method='ffill')
+    
+    # 计算日度收益和净值
+    daily_returns = (prices_daily.pct_change() * asset_weights_daily).sum(axis=1)
+    daily_nav = (1 + daily_returns).cumprod()
+
+    # 保存日度数据
+    daily_results_df = pd.DataFrame({
+        "日期": daily_returns.index,
+        "日度收益率": daily_returns.values,
+        "净值": daily_nav.values,
+    })
+    daily_results_df.to_csv(OUTPUT_DIR / f"portfolio_daily_performance_{timestamp}.csv",
+                     index=False, encoding='utf-8-sig')
+
+    # 保存月度数据
+    monthly_results_df = pd.DataFrame({
         "日期": port_ret.index,
         "月度收益率": port_ret.values,
-        "净值": port_nav.values,
+        "月度净值": (1 + port_ret).cumprod().values,
     })
-    results_df.to_csv(OUTPUT_DIR / f"portfolio_performance_{timestamp}.csv",
+    monthly_results_df.to_csv(OUTPUT_DIR / f"portfolio_monthly_performance_{timestamp}.csv",
                      index=False, encoding='utf-8-sig')
 
     # 保存资产权重历史（添加中文名称）
@@ -474,6 +494,11 @@ def save_results(port_ret: pd.Series, asset_weights: pd.DataFrame,
                               encoding='utf-8-sig')
 
     print(f"\n结果已保存到 output/ 目录，时间戳: {timestamp}")
+    print(f"- 日度数据：portfolio_daily_performance_{timestamp}.csv")
+    print(f"- 月度数据：portfolio_monthly_performance_{timestamp}.csv")
+    print(f"- 资产权重：asset_weights_{timestamp}.csv")
+    print(f"- 象限权重：quadrant_weights_{timestamp}.csv")
+    print(f"- 象限收益：quadrant_returns_{timestamp}.csv")
 
 
 # ---------------------------------------------------------------------------
