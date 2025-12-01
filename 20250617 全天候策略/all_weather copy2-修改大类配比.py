@@ -53,7 +53,7 @@ except ImportError as exc:  # pragma: no cover
 # Configuration
 # ---------------------------------------------------------------------------
 START_DATE = "2011-01-01"
-END_DATE = "2025-07-16"
+END_DATE = "2026-01-01"  # 设置为更远的日期，让数据获取函数自动截止到最新可用数据
 FEE_RATE = 0.0001  # 单边万分之五
 EWMA_LAMBDA = 0.96  # decay parameter for EWMA
 WINDOW_MONTHS = 36  # rolling window for risk estimation
@@ -150,25 +150,49 @@ def fetch_price_series(ticker: str) -> pd.Series:
     Data are cached locally (pickle)."""
     ak_symbol = TICKER_MAP[ticker]
     cache_file = _cache_path(ak_symbol)
+    
+    # 如果缓存文件存在且是今天创建的，直接使用缓存
     if cache_file.exists():
-        return pd.read_pickle(cache_file)
+        # 检查文件修改时间，如果是今天修改的就使用缓存
+        import time
+        file_time = os.path.getmtime(cache_file)
+        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        if file_time >= today_start:
+            return pd.read_pickle(cache_file)
 
     print(f"Fetching data for {ticker} ({ETF_NAMES[ticker]})...")
-    df = ak.fund_etf_hist_sina(symbol=ak_symbol)
-    df["date"] = pd.to_datetime(df["date"])
-    df.set_index("date", inplace=True)
-    # Use *close*; adjust if necessary. Sina data are already adjusted.
-    price = df["close"].astype(float).rename(ticker)
-    price.sort_index(inplace=True)
+    try:
+        df = ak.fund_etf_hist_sina(symbol=ak_symbol)
+        df["date"] = pd.to_datetime(df["date"])
+        df.set_index("date", inplace=True)
+        # Use *close*; adjust if necessary. Sina data are already adjusted.
+        price = df["close"].astype(float).rename(ticker)
+        price.sort_index(inplace=True)
+        
+        # 显示实际获取的数据范围
+        print(f"  实际数据范围: {price.index[0].strftime('%Y-%m-%d')} 至 {price.index[-1].strftime('%Y-%m-%d')}")
 
-    # Persist cache
-    price.to_pickle(cache_file)
-    return price
+        # Persist cache
+        price.to_pickle(cache_file)
+        return price
+    except Exception as e:
+        print(f"  获取数据失败: {e}")
+        # 如果获取失败且有缓存文件，使用旧缓存
+        if cache_file.exists():
+            print(f"  使用缓存数据...")
+            return pd.read_pickle(cache_file)
+        else:
+            raise
 
 
 def get_all_prices(tickers: List[str]) -> pd.DataFrame:
     series = [fetch_price_series(t) for t in tickers]
     prices = pd.concat(series, axis=1).sort_index()
+    
+    # 显示整体数据范围
+    print(f"\n整体数据范围: {prices.index[0].strftime('%Y-%m-%d')} 至 {prices.index[-1].strftime('%Y-%m-%d')}")
+    print(f"数据获取日期: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
     return prices
 
 

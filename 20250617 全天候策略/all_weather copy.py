@@ -62,7 +62,7 @@ except ImportError as exc:  # pragma: no cover
 # ---------------------------------------------------------------------------
 
 START_DATE = "2011-12-31"
-END_DATE = "2025-06-30"
+END_DATE = "2025-08-11"
 FEE_RATE = 0.0001  # 单边万分之一
 EWMA_LAMBDA = 0.96  # decay parameter for EWMA
 WINDOW_MONTHS = 36  # rolling window for risk estimation
@@ -84,7 +84,7 @@ ASSET_NAMES: Dict[str, str] = {
     "159980.SZ": "有色ETF",
     "159981.SZ": "能源化工ETF",
     "M.DCE": "豆粕期货",
-    "160723.SZ": "嘉实原油LOF",
+    # "160723.SZ": "嘉实原油LOF",
     "RB.SHF": "螺纹钢期货",
     # 红利
     "510880.SH": "红利ETF",
@@ -99,7 +99,7 @@ ASSET_CLASSES: Dict[str, List[str]] = {
         "510300.SH", "510500.SH", "512100.SH", "159920.SZ", "159740.SZ"
     ],
     "债券": ["511090.SH", "511010.SH", "511260.SH"],
-    "商品": ["159980.SZ", "159981.SZ", "M.DCE", "160723.SZ", "RB.SHF"],
+    "商品": ["159980.SZ", "159981.SZ", "M.DCE", "RB.SHF"],
     "红利": ["510880.SH", "513630.SH"],
     "黄金": ["518880.SH"],
 }
@@ -149,22 +149,47 @@ def fetch_price_series(ticker: str) -> pd.Series:
     print(f"Fetching data for {ticker} ({ASSET_NAMES.get(ticker, 'Unknown')})...")
     price = None
     df = pd.DataFrame()
-
     try:
         if ticker.endswith((".SH", ".SZ")):
             symbol_code = ticker.split('.')[0]
-            # For LOF, use fund_lof_hist_em; for ETFs, use fund_etf_hist_em
-            if ticker == "160723.SZ":
-                df = ak.fund_lof_hist_em(symbol=symbol_code, start_date="20100101", end_date="20251231")
-            else:
-                df = ak.fund_etf_hist_em(symbol=symbol_code)
 
-            if not df.empty:
-                df['date'] = pd.to_datetime(df['日期'])
-                df = df.set_index('date').sort_index()
-                if ticker == "160723.SZ" and '单位净值' in df.columns:
-                    price = df['单位净值'].astype(float)
-                elif '收盘' in df.columns:
+            # 1) 统一优先使用 ETF/LOF 交易价格接口（带复权/收盘价等列）
+            try:
+                df = ak.fund_etf_hist_em(symbol=symbol_code, period="daily")
+            except Exception:
+                df = pd.DataFrame()
+
+            # 2) 如果为空或异常，则尝试 LOF 净值接口
+            if df is None or df.empty:
+                try:
+                    # LOF 净值接口列通常为：净值日期 / 单位净值 / 累计净值 / 日增长率 ...
+                    df_lof = ak.fund_lof_hist_em(symbol=symbol_code, start_date="20100101", end_date="20251231")
+                except Exception:
+                    df_lof = pd.DataFrame()
+
+                if df_lof is not None and not df_lof.empty:
+                    # 规范索引与价格列
+                    date_col = '净值日期' if '净值日期' in df_lof.columns else ('日期' if '日期' in df_lof.columns else None)
+                    if date_col is not None:
+                        df_lof['date'] = pd.to_datetime(df_lof[date_col])
+                        df_lof = df_lof.set_index('date').sort_index()
+                        if '单位净值' in df_lof.columns:
+                            price = df_lof['单位净值'].astype(float)
+                        elif '收盘' in df_lof.columns:
+                            price = df_lof['收盘'].astype(float)
+                        elif 'close' in df_lof.columns:
+                            price = df_lof['close'].astype(float)
+                        df = df_lof
+            else:
+                # 正常 ETF/LOF 交易价格路径
+                date_col = '日期' if '日期' in df.columns else ('date' if 'date' in df.columns else None)
+                if date_col is not None:
+                    if date_col != 'date':
+                        df['date'] = pd.to_datetime(df[date_col])
+                    else:
+                        df['date'] = pd.to_datetime(df['date'])
+                    df = df.set_index('date').sort_index()
+                if '收盘' in df.columns:
                     price = df['收盘'].astype(float)
                 elif 'close' in df.columns:
                     price = df['close'].astype(float)

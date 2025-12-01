@@ -1556,8 +1556,8 @@ def main():
         # 方法3: 运行月度动态调仓回测 (新增) - 每月月初和月中调仓
         monthly_results = ef_analyzer.run_monthly_analysis(
             start_date='20200101',      # 调仓回测开始日期
-            lookback_months=12,         # 使用12个月历史数据进行优化
-            rebalance_days=[1, 15],     # 每月1日和15日调仓
+            lookback_months=6,         # 使用12个月历史数据进行优化
+            rebalance_days=[1,15],     # 每月1日和15日调仓
             save_results=True
         )
         
@@ -1583,7 +1583,7 @@ def main():
         print("- 增加调仓频率有助于及时调整投资组合，但可能增加交易成本")
         
         # 方法2: 也可以运行传统的全样本分析
-        # results = ef_analyzer.run_complete_analysis(start_date='20200101')
+        results = ef_analyzer.run_complete_analysis(start_date='20200101')
         
     except Exception as e:
         print(f"分析过程中出现错误: {e}")
